@@ -568,5 +568,5 @@ function Add-SCCMDriverPackageContent
 
 
 
-New-SCCMConnection "1NDCITVWCM01.TSI.LAN" "TAB"
-Import-SCCMDriverStore "\\1NDCITVWCM01.tsi.lan\sccm_store\OSD\DriverSources" "\\1NDCITVWCM01.tsi.lan\sccm_store\OSD\DriverPackages"
+New-SCCMConnection "CM01" "sitecode"
+Import-SCCMDriverStore "\\CM01\sccm_store\OSD\DriverSources" "\\CM01\sccm_store\OSD\DriverPackages"
