@@ -1,7 +1,7 @@
 ﻿#first part
 $computer = $env:COMPUTERNAME
-$pass = "P1stol09"
-$user = "ITSupport"
+$pass = "NewPass09"
+$user = "ITSupportAcct"
 $newpass = [ADSI]"WinNT://$computer/$user,user"
 $newpass.SetPassword($pass)
 $newpass.SetInfo()
