@@ -1,0 +1,21 @@
+﻿Subject: "CN=eDellRoot"
+Issuer: "CN=eDellRoot"
+Serial Number:
+6b:c5:7b:95:18:93:aa:97:4b:62:4a:c0:88:fc:3b:b6
+Fingerprint (SHA-256):
+EC:30:C9:C3:06:5A:06:BB:07:DC:5B:1C:6B:49:7F:37:0C:1C:A6:5C:0F:30:C0:8E:04:2B:A6:BC:EC:C7:8F:2C
+Fingerprint (SHA1):
+98:A0:4E:41:63:35:77:90:C4:A7:9E:6D:71:3F:F0:AF:51:FE:69:27
+
+
+(b)
+https://github.com/hannob/superfishy/blob/master/certificates/DSDTestProvider.crt
+
+Subject: "CN=DSDTestProvider,O=DSDTestProvider,OU=DSDTestProvider"
+Issuer: "CN=DSDTestProvider,O=DSDTestProvider,OU=DSDTestProvider"
+Serial Number:
+a4:4c:38:47:f8:ee:71:80:43:4d:b1:80:b9:a7:e9:62
+Fingerprint (SHA-256):
+0F:91:2F:D7:BE:76:0B:E2:5A:FB:C5:6B:DC:09:CD:9E:5D:CC:9C:6F:6A:55:A7:78:AE:FC:B6:AA:30:E3:15:54
+Fingerprint (SHA1):
+02:C2:D9:31:06:2D:7B:1D:C2:A5:C7:F5:F0:68:50:64:08:1F:B2:21

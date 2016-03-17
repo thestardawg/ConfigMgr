@@ -1,0 +1,1 @@
+﻿Invoke-Command -ComputerName DP01 {Restart-Service WDSServer}
