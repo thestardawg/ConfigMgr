@@ -1,5 +1,5 @@
-﻿$SiteServer = "1ndcitvwcm01.tsi.lan"
-$SiteCode = "TAB"
+﻿$SiteServer = "cm01"
+$SiteCode = ""
 $DistributionGroup = "Data Centers"
 
 $ModulePath = (($env:SMS_ADMIN_UI_PATH).Substring(0,$env:SMS_ADMIN_UI_PATH.Length-5)) + '\ConfigurationManager.psd1'
