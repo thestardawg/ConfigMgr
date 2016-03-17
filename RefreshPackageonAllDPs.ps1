@@ -1,5 +1,5 @@
-﻿$SiteCode = "TAB"
-$PackageID = "TAB00004"
+﻿$SiteCode = ""
+$PackageID = ""
      $distpoints = Get-WmiObject -Namespace "root\SMS\Site_$($SiteCode)" -Query "Select * From SMS_DistributionPoint WHERE PackageID='$PackageID'"
         foreach ($dp in $distpoints)
         {
