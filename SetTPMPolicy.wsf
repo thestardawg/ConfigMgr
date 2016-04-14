@@ -1,0 +1,91 @@
+<job id="SetTPMPolicy">
+   <script language="VBScript" src="ZTIUtility.vbs"/>
+   <script language="VBScript">
+
+' // ***************************************************************************
+' // 
+' // Copyright (c) Coretech a/s.  All rights reserved.
+' // 
+' // File:      SetTPMPolicy.wsf
+' // 
+' // Version:   1.0.0000.0
+' // 
+' // Purpose:   Set local policys requred to have Windows take ownership of TPM and back-up key to Active Directory,
+' // 			And Enable MBAM to encrypt pre-provisioned disk.
+' // 
+' // Usage:     cscript SetTPMPolicy.wsf [/debug:true] 
+' // 
+' // Revisions:
+' // 1.0.0000.0   02/04/2014   Created script.
+' // 
+' // ***************************************************************************
+
+Option Explicit
+RunNewInstance
+
+'//----------------------------------------------------------------------------
+'//
+'//  Global constants
+'//
+'//----------------------------------------------------------------------------
+
+'//----------------------------------------------------------------------------
+'//  Main Class
+'//----------------------------------------------------------------------------
+
+Class SetTPMPolicy
+
+    Function Main
+
+        Dim iRetVal
+        Dim sTempHive, sHiveLocation, sOSDisk
+		Dim sTPMRegistryKey, sFVERegistryKey, sCmd, sRegCMD
+
+		sOSDisk = oEnvironment.Item("OSDTargetSystemDrive")
+		sHiveLocation = sOSDisk & "\Windows\system32\Config\software"
+        sTempHive = "HKLM\TempHive"
+		
+        sFVERegistryKey = "\Policies\Microsoft\FVE"
+		sTPMRegistryKey = "\Policies\Microsoft\TPM"
+		
+		sRegCMD = oShell.ExpandEnvironmentStrings("%SystemRoot%\system32\reg.exe")
+		       
+		oLogging.CreateEntry "Setting local TPM policys", LogTypeInfo  
+        
+        'load temp hive
+		sCMD = sRegCMD & " LOAD " & sTempHive & " " & sHiveLocation
+		iRetVal = oUtility.RunWithHeartbeat(sCMD)
+        TestAndFail iretVal, 10005, "Loading Offline registry hive from : " & sHiveLocation
+		
+		'set policys
+		sCMD = sRegCMD & " ADD """ & sTempHive & sTPMRegistryKey & """ /v OSManagedAuthLevel /t REG_DWORD /d 2 /f"
+        iRetVal = oUtility.RunWithHeartbeat(sCMD)
+        TestAndFail iretVal, 10006, "Execution: " & sCMD
+		
+		sCMD = sRegCMD & " ADD """ & sTempHive & sTPMRegistryKey & """ /v ActiveDirectoryBackup /t REG_DWORD /d 1 /f"
+        iRetVal = oUtility.RunWithHeartbeat(sCMD)
+        TestAndFail iretVal, 10006, "Execution: " & sCMD
+		
+		sCMD = sRegCMD & " ADD """ & sTempHive & sTPMRegistryKey & """ /v RequireActiveDirectoryBackup /t REG_DWORD /d 1 /f"
+        iRetVal = oUtility.RunWithHeartbeat(sCMD)
+        TestAndFail iretVal, 10006, "Execution: " & sCMD
+		
+		sCMD = sRegCMD & " ADD """ & sTempHive & sFVERegistryKey & """ /v OSEncryptionType /t REG_DWORD /d 2 /f"
+        iRetVal = oUtility.RunWithHeartbeat(sCMD)
+        TestAndFail iretVal, 10006, "Execution: " & sCMD
+		
+		sCMD = sRegCMD & " ADD """ & sTempHive & sFVERegistryKey & """ /v UseTPM /t REG_DWORD /d 2 /f"
+        iRetVal = oUtility.RunWithHeartbeat(sCMD)
+        TestAndFail iretVal, 10006, "Execution: " & sCMD
+		
+		'unload temp hive
+		sCMD = sRegCMD & " UNLOAD " & sTempHive
+		iRetVal = oUtility.RunWithHeartbeat(sCMD)
+        TestAndFail iretVal, 10005, "Unloading Offline registry hive"
+		
+    End Function
+
+End Class
+
+   </script>
+</job>

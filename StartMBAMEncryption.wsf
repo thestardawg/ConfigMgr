@@ -1,0 +1,493 @@
+<job id="StartMBAMEncryption">
+   <script language="VBScript" src="ZTIUtility.vbs"/>
+   <script language="VBScript">
+
+' // ***************************************************************************
+' // 
+' // Copyright (c) Microsoft Corporation.  All rights reserved.
+' // 
+' // Microsoft Deployment Toolkit Solution Accelerator
+' //
+' // File:      StartMBAMEncryption.wsf
+' // 
+' // Version:   6.0.2058.2
+' // 
+' // Purpose:   Start encryption using MBAM
+' // 
+' // Usage:     cscript StartMBAMEncryption.wsf [/debug:true] /MBAMServiceEndPoint:<KeyRecoveryServiceEndPoint registry value>
+' //                    [/EncryptionMethod:<integer value for encryption method>] [/WaitForEncryption:true]
+' // 
+' // Revisions:
+' // 6.0.2058.0   02/20/2012   Created script.
+' // 6.0.2058.1   11/07/2012   Now using /MBAMServiceEndPoint to pass the MBAM service
+' //                           URL instead of /AddRegFile and /RemoveRegFile.
+' // 6.0.2058.2   11/29/2012   Added /EncryptionMethod switch.
+' // 
+' // ***************************************************************************
+
+Option Explicit
+RunNewInstance
+
+'//----------------------------------------------------------------------------
+'//
+'//  Global constants
+'//
+'//----------------------------------------------------------------------------
+
+'//----------------------------------------------------------------------------
+'//  Main Class
+'//----------------------------------------------------------------------------
+
+Class StartMBAMEncryption
+
+    Public oTpm
+    Public bTpmActivated, bTpmOwned, bTpmEnabled, bTpmOwnershipAllowed, bEndorsementKeyPairPresent
+
+    Function Main
+
+        Dim aAddMBAMRegistryValues, aRemoveMBAMRegistryValues
+        Dim oService, oServices, colOS, colEnVol, oEncVol, oWMITPM, oTPMs, oTPM, objOS
+        Dim iBuildNumber, iRetVal, iLoopCount, iEncryptionStatus, iPercentComplete, i
+        Dim sMBAMRegistryKey, sFVERegistryKey, sMBAMServiceEndPoint, sEncryptionMethod, sCmd, sRegCMD
+        Dim bWaitForEncryption, bTPMActive, bEndorsementKeyPairPresent, oDisk, aProtectors
+		Dim sConnection, objWMIBDE
+
+        sMBAMRegistryKey = "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\MBAM"
+        aAddMBAMRegistryValues = Array("Installed", "KeyRecoveryOptions", "UseKeyRecoveryService", "DeploymentTime", "NoStartupDelay")
+        aRemoveMBAMRegistryValues = Array("KeyRecoveryServiceEndPoint", "KeyRecoveryOptions", "UseKeyRecoveryService", "DeploymentTime", "NoStartupDelay")
+
+        sFVERegistryKey = "HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\FVE"       
+     
+        ' Get inputs
+
+        sMBAMServiceEndPoint = oEnvironment.Item("MBAMServiceEndPoint")
+        If sMBAMServiceEndPoint <> "" then
+            oLogging.CreateEntry "MBAMServiceEndPoint: " & sMBAMServiceEndPoint, LogTypeInfo
+        Else
+            TestAndFail False, 10001, "MBAMServiceEndPoint not specified."
+        End If
+        
+        sEncryptionMethod = oEnvironment.Item("EncryptionMethod")
+		
+		bWaitForEncryption = (ucase(oEnvironment.Item("WaitForEncryption")) = "TRUE")
+		oLogging.CreateEntry "WaitForEncryption: " & bWaitForEncryption, LogTypeInfo
+
+		' default is AES256
+
+		if sEncryptionMethod = "" Then sEncryptionMethod = "4"
+
+			oLogging.CreateEntry "EncryptionMethod: " & sEncryptionMethod, LogTypeInfo
+
+			Set colOS = objWMI.ExecQuery("Select BuildNumber from Win32_OperatingSystem")
+			   For Each objOS In colOS
+				   iBuildNumber = objOS.BuildNumber
+			Next
+
+		If (sEncryptionMethod = "1" or sEncryptionMethod = "2") and iBuildNumber >= 9200 Then 
+
+			TestAndFail False, 10002, "EncryptionMethod value not valid for Windows 8 and higher."
+
+		End If
+
+			' Check TPM for non-WTG
+
+		if UCase(oEnvironment.Item("_SMSTSWTG")) <> "TRUE" Then
+
+				TestAndFail (TpmValidate), 10005, "TPM Validated"
+
+		End If
+
+		' Get BitLocker WMI Object
+		sConnection = "winmgmts:{impersonationLevel=impersonate,authenticationLevel=pktPrivacy}!root\cimv2\Security\MicrosoftVolumeEncryption"  
+		On Error resume Next
+		Set objWMIBDE = GetObject(sConnection)
+		on error goto 0
+		TestAndFail Err, 10005, "Unable to connect to Bitlocker WMI Object -  bitlocker not installed"
+			
+		Set oServices = objWMI.ExecQuery("Select * from win32_service where name='MBAMAgent'")
+        TestAndFail (oServices.count = 1), 10005, "MBAM Client Agent is installed"
+        'Stop the service 
+        For Each oService In oServices
+            oService.StopService()
+        Next
+
+        ' Locate correct reg.exe for OS architecture and set MBAM registry values
+
+        If oFSO.FileExists(oShell.ExpandEnvironmentStrings("%SystemRoot%\sysnative\reg.exe")) then
+            sRegCMD = oShell.ExpandEnvironmentStrings("%SystemRoot%\sysnative\reg.exe")
+        Else
+            sRegCMD = oShell.ExpandEnvironmentStrings("%SystemRoot%\system32\reg.exe") 
+        End if
+        oLogging.CreateEntry "Using " & sRegCMD & " for Reg Add/Delete", LogTypeInfo      
+        
+        sCMD = sRegCMD & " ADD """ & sMBAMRegistryKey & """ /v KeyRecoveryServiceEndPoint /t REG_EXPAND_SZ /d " & sMBAMServiceEndPoint & " /f"
+        iRetVal = oUtility.RunWithHeartbeat(sCMD)
+        TestAndFail iretVal, 10006, "Importing KeyRecoveryServiceEndPoint Registry value: " & sMBAMServiceEndPoint
+
+        For i = 0 to UBound(aAddMBAMRegistryValues)
+            sCMD = sRegCMD & " ADD """ & sMBAMRegistryKey & """ /v " & aAddMBAMRegistryValues(i) & " /t REG_DWORD /d 1 /f"
+            iRetVal = oUtility.RunWithHeartbeat(sCMD)
+            TestAndFail iretVal, 10006, "Importing Registry value: " & aAddMBAMRegistryValues(i)
+        Next
+
+	' Create recovery password if missing
+
+	for each oDisk in GetObject("winmgmts:\\.\root\CIMV2\Security\MicrosoftVolumeEncryption"). _
+		ExecQuery("SELECT * FROM Win32_EncryptableVolume WHERE DriveLetter = 'C:'",,48)
+		oDisk.GetKeyProtectors 3, aProtectors
+                if UBound(aProtectors) <> 0 Then
+
+			sCMD = "manage-bde -protectors -add C: -rp"
+		        iRetVal = oUtility.RunWithHeartbeat(sCMD)
+		        TestAndLog iRetVal, "Execution: " & sCMD
+
+		End If		
+
+	next
+
+
+
+        ' Set BitLocker encryption method
+
+        sCMD = sRegCMD & " ADD """ & sFVERegistryKey & """ /v EncryptionMethod /t REG_DWORD /d " & sEncryptionMethod & " /f"
+        iRetVal = oUtility.RunWithHeartbeat(sCMD)
+        TestAndFail iretVal, 10006, "Importing EncryptionMethod Registry value: " & sMBAMServiceEndPoint
+
+	' set protectors
+
+        sCMD = sRegCMD & " ADD """ & sFVERegistryKey & """ /v UseTPM /t REG_DWORD /d 2 /f"
+        iRetVal = oUtility.RunWithHeartbeat(sCMD)
+        TestAndFail iretVal, 10006, "Execution: " & sCMD
+
+        sCMD = sRegCMD & " ADD """ & sFVERegistryKey & """ /v EnableBDEWithNoTPM /t REG_DWORD /d 1 /f"
+        iRetVal = oUtility.RunWithHeartbeat(sCMD)
+        TestAndFail iretVal, 10006, "Execution: " & sCMD
+
+        sCMD = sRegCMD & " ADD """ & sFVERegistryKey & """ /v UsePIN /t REG_DWORD /d 2 /f"
+        iRetVal = oUtility.RunWithHeartbeat(sCMD)
+        TestAndFail iretVal, 10006, "Execution: " & sCMD
+
+        sCMD = sRegCMD & " ADD """ & sFVERegistryKey & """ /v UseAdvancedStartup /t REG_DWORD /d 1 /f"
+        iRetVal = oUtility.RunWithHeartbeat(sCMD)
+        TestAndFail iretVal, 10006, "Execution: " & sCMD
+
+
+        ' Restart the MBAMAgent Service
+
+        For Each oService In oServices
+          oService.StartService()
+        Next
+
+
+        ' Waiting For Encryption to Start
+
+        iLoopCount = 0
+
+        Do
+            oLogging.ReportProgress "Waiting For Encryption to Start",  iLoopCount*4/20
+            oLogging.CreateEntry "Waiting for Encryption to Start", LogTypeInfo
+            wscript.Sleep 15000
+
+
+	    sCMD = "manage-bde -protectors -enable c:"
+            iRetVal = oUtility.RunWithHeartbeat(sCMD)
+            TestAndLog iRetVal, "Execution: " & sCMD
+
+            ILoopCount = iLoopCount + 1
+            If iLoopCount >= 20 then 
+                TestAndLog 10008, "Timeout: Encryption did not start"
+            End If
+
+        Loop Until (iRetVal = 0) or iLoopCount >= 20
+
+        oLogging.ReportProgress "Encryption Started", 100
+        oLogging.CreateEntry "Encryption Started", LogTypeInfo
+		
+		'************
+		'OPTIONAL wait for encryption
+		if bWaitForEncryption then
+			iLoopCount = 0
+			Do
+				Set colEnVol = objWMIBDE.ExecQuery("Select * from Win32_EncryptableVolume where DriveLetter='C:'")
+				for each oEncVol in colEnVol
+					oEncVol.GetConversionStatus iEncryptionStatus, iPercentComplete
+				Next
+				oLogging.ReportProgress "Encrypting C: drive",  iPercentComplete
+				oLogging.CreateEntry "Encrypting C: drive " & iPercentComplete & "% Complete.", LogTypeInfo
+				wscript.Sleep 60000
+				ILoopCount = iLoopCount + 1
+				If iLoopCount > 300 then 
+					TestAndLog False, "Timeout: Encryption has not finished"
+					Exit Do
+				End If
+			Loop Until (iEncryptionStatus = 1)
+		end if
+		
+		'************
+
+		sCMD = "manage-bde -on C:"
+			iRetVal = oUtility.RunWithHeartbeat(sCMD)
+			TestAndLog iRetVal, "Execution: " & sCMD
+
+		' Set TPM protector if missing
+
+		for each oDisk in GetObject("winmgmts:\\.\root\CIMV2\Security\MicrosoftVolumeEncryption"). _
+			ExecQuery("SELECT * FROM Win32_EncryptableVolume WHERE DriveLetter = 'C:'",,48)
+			oDisk.GetKeyProtectors 1, aProtectors
+					if UBound(aProtectors) <> 0 Then
+
+				sCMD = "manage-bde -protectors -add C: -tpm"
+					iRetVal = oUtility.RunWithHeartbeat(sCMD)
+					TestAndLog iRetVal, "Execution: " & sCMD
+
+			End If		
+
+		next
+
+		' Set password for WTG
+			
+		if UCase(oEnvironment.Item("_SMSTSWTG")) = "TRUE" and oEnvironment.Item("OSDBitLockerPIN") <> "" Then
+
+			for each oDisk in GetObject("winmgmts:\\.\root\CIMV2\Security\MicrosoftVolumeEncryption"). _
+				ExecQuery("SELECT * FROM Win32_EncryptableVolume WHERE DriveLetter = 'C:'",,48)
+				iRetVal = oDisk.ProtectKeyWithPassphrase("", oEnvironment.Item("OSDBitLockerPIN"))
+					TestAndFail iretVal, 10006, "ProtectKeyWithPassphrase"
+			next
+
+		End If
+
+        ' Remove MBAM registry entries
+
+        For i = 0 to UBound(aRemoveMBAMRegistryValues)
+            sCMD = sRegCMD & " DELETE """ & sMBAMRegistryKey & """ /v " & aRemoveMBAMRegistryValues(i) & " /f"
+            iRetVal = oUtility.RunWithHeartbeat(sCMD)
+            TestAndFail iretVal, 10009, "Removing Registry value: " & aRemoveMBAMRegistryValues(i)
+        Next
+
+		' Remove Protectors
+
+        sCMD = sRegCMD & " DELETE """ & sFVERegistryKey & """ /v UseTPM /f"
+        iRetVal = oUtility.RunWithHeartbeat(sCMD)
+        TestAndFail iretVal, 10006, "Execution: " & sCMD
+
+        sCMD = sRegCMD & " DELETE """ & sFVERegistryKey & """ /v EnableBDEWithNoTPM /f"
+        iRetVal = oUtility.RunWithHeartbeat(sCMD)
+        TestAndFail iretVal, 10006, "Execution: " & sCMD
+
+        sCMD = sRegCMD & " DELETE """ & sFVERegistryKey & """ /v UsePIN /f"
+        iRetVal = oUtility.RunWithHeartbeat(sCMD)
+        TestAndFail iretVal, 10006, "Execution: " & sCMD
+
+        sCMD = sRegCMD & " DELETE """ & sFVERegistryKey & """ /v UseAdvancedStartup /f"
+        iRetVal = oUtility.RunWithHeartbeat(sCMD)
+        TestAndFail iretVal, 10006, "Execution: " & sCMD
+
+		' Suspend protection until reboot
+
+		if iBuildNumber >= 9200 Then
+				sCMD = "manage-bde -protectors -disable c:"
+				iRetVal = oUtility.RunWithHeartbeat(sCMD)
+				TestAndLog iRetVal, "Execution: " & sCMD
+		End If
+
+    End Function
+
+	'// TPM Management Functions
+
+	Function GetTpmInstance()
+	
+		Dim iRetVal, sConnection
+		Dim oTpmWmi, iTpmWmi
+
+		On Error Resume Next
+
+		sConnection = "winmgmts:{impersonationLevel=impersonate,authenticationLevel=pktPrivacy}!root\cimv2\Security\MicrosoftTpm"
+
+		Set oTpmWmi = GetObject(sConnection)
+		TestAndFail SUCCESS, 6732, "Connect to MicrosoftTPM provider"
+
+		'// There should either be 0 or 1 instance of the TPM provider class
+
+		Set iTpmWmi = oTpmWmi.InstancesOf("Win32_Tpm")
+
+		If iTpmWmi.Count = 0 Then
+		
+			oLogging.CreateEntry "Failed to find a TPM instance in the provider class.", LogTypeError
+			GetTpmInstance = Failure
+			EXIT FUNCTION
+			
+		End If
+		Err.Clear
+
+		'Get a single instance of the TPM provider class
+		Set oTpm = oTpmWmi.Get("Win32_Tpm=@")
+		TestAndFail SUCCESS, 6733, "Get a TPM instance in the provider class"
+
+	End Function
+
+	Function TpmValidate ()
+	
+		Dim iRetVal, sCmd, sTpmOwnerPassword
+		iRetVal = Success
+
+		'// Set oTpm to valid instance
+
+		iRetVal = GetTpmInstance()
+		TestAndFail iRetVal, 6734, "Get TPM Instance"
+
+		'// Set global booleans for TPM state. Error bubble handled by subs
+
+		iRetVal	= GetTpmEnabled()
+		TestAndFail iRetVal, 6735, "Check to see if TPM is enabled"
+
+		iRetVal = GetTpmActivated()
+		TestAndFail iRetVal, 6736, "Check to see if TPM is activated"
+
+		iRetVal = GetTpmOwner()
+		TestAndFail iRetVal, 6737, "Check to see if TPM is owned"
+
+		iRetVal = GetTpmOwnershipAllowed()
+		TestAndFail iRetVal, 6738, "Check to see if TPM Ownership is allowed"
+
+		iRetVal = GetEndorsementKeyPairPresent()
+
+		oLogging.CreateEntry "TpmEnabled: " & bTpmEnabled, LogTypeInfo
+		oLogging.CreateEntry "TpmActivated: " & bTpmActivated, LogTypeInfo
+		oLogging.CreateEntry "TpmOwned: " & bTpmOwned, LogTypeInfo
+		oLogging.CreateEntry "TpmOwnershipAllowed: " & bTpmOwnershipAllowed, LogTypeInfo
+		oLogging.CreateEntry "EndorsementKeyPairPresent: " & bEndorsementKeyPairPresent, LogTypeInfo
+
+
+		'// Single instance check to allow future corrective action branching.
+		TestAndFail bTPMEnabled, 6739, "Check to see if TPM is enabled"
+		TestAndFail bTPMActivated, 6740, "Check to see if TPM is activated"
+		TestAndFail bTpmOwned or bTpmOwnershipAllowed , 6741, "Check to see if TPM is owned and ownership is allowed"
+
+		If bTpmOwned <> True AND bTpmOwnershipAllowed = True Then
+
+			If oEnvironment.Item("TpmOwnerPassword") <> "" Then
+			
+				oLogging.CreateEntry "TPM Ownership being initiated.", LogTypeInfo
+				iRetVal = SetTpmOwner(oEnvironment.Item("TpmOwnerPassword"))
+				TestAndFail iRetVal, 6741, "TPM Owner Password set"
+
+			ElseIf oEnvironment.Item("AdminPassword") <> "" Then
+			
+				oLogging.CreateEntry "TPM Ownership being initiated with AdminP@ssword (not TPMOwnerP@ssword).", LogTypeInfo
+				iRetVal = SetTpmOwner(oEnvironment.Item("AdminPassword"))
+				TestAndFail iRetVal, 6742, "TPM Owner P@ssword set to AdminP@ssword"
+
+			Else
+			
+				oLogging.CreateEntry "TPM Ownership being initiated with Default p@ssword (not TPMOwnerP@ssword).", LogTypeInfo
+				iRetVal = SetTpmOwner("1ml0ck3d")
+				TestAndFail iRetVal, 6743, "Set TPM Owner P@ssword to value"
+				
+			End If
+
+		End If
+
+		TpmValidate = Success
+
+	End Function
+
+
+	Function GetTpmEnabled()
+		Dim iRetVal
+		iRetVal = Success
+
+		iRetVal = oTpm.IsEnabled(bTpmEnabled)
+		TestAndFail iRetVal, 6744, "Check to see if TPM is enabled"
+
+		oLogging.CreateEntry "Success TPM Enabled", LogTypeInfo
+		GetTpmEnabled = Success
+
+	End Function
+
+
+	Function GetTpmOwner()
+		Dim iRetVal
+		iRetVal = Success
+
+		iRetVal = oTpm.IsOwned(bTpmOwned)
+		TestAndFail iRetVal, 6745, "Check TPM Owner"
+
+		oLogging.CreateEntry "Success TPM Is Owned", LogTypeInfo
+		GetTpmOwner = Success
+
+	End Function
+
+	Function GetEndorsementKeyPairPresent()
+		Dim iRetVal
+		iRetVal = Success
+
+		iRetVal = oTpm.IsEndorsementKeyPairPresent(bEndorsementKeyPairPresent)
+
+		oLogging.CreateEntry "Check for Endorsement Key Pair Present = " & iRetVal, LogTypeInfo
+		GetEndorsementKeyPairPresent = Success
+
+	End Function
+
+
+	Function GetTpmActivated()
+		Dim iRetVal
+		iRetVal = Success
+
+		iRetVal = oTpm.IsActivated(bTpmActivated)
+		TestAndFail iRetVal, 6747, "Check to see if TPM is activated"
+
+		oLogging.CreateEntry "Success TPM Is Activated", LogTypeInfo
+		GetTpmActivated = Success
+
+	End Function
+
+
+	Function GetTpmOwnershipAllowed
+		Dim iRetVal
+		iRetVal = Success
+
+		iRetVal = oTpm.IsOwnershipAllowed(bTpmOwnershipAllowed)
+		TestAndFail iRetVal, 6748, "Check to see if TPM Ownership is allowed"
+		oLogging.CreateEntry "Success TPM Ownership Allowed", LogTypeInfo
+		GetTpmOwnershipAllowed = Success
+
+	End Function
+
+
+	Function SetTpmOwner (sTpmOwnerPassword)
+		Dim iRetVal, oExec, sOwnerAuthDigest, sErrCode
+		'iRetVal = Failure
+
+		On Error Resume Next
+
+
+		'// Convert password to Digest
+
+		'iRetVal = oTpm.ConvertToOwnerAuth(sTpmOwnerPassword, sOwnerAuthDigest)
+		'TestAndFail iRetVal, 6749, "Convert owner p@ssword to owner authorization"
+
+
+		'// Set owner
+
+		'If not bEndorsementKeyPairPresent then
+		'	iRetVal = oTpm.CreateEndorsementKeyPair
+		'	TestAndFail iRetVal, 6750, "Create endorsement key pair"
+
+		'End if
+
+		'iRetVal = oTpm.TakeOwnership(sOwnerAuthDigest)
+		'oLogging.CreateEntry "Starting owner authorization process on the TPM", LogTypeInfo
+		'TestAndFail iRetVal, 6751, "Change owner authorization"
+
+		SetTpmOwner = Success
+
+	End Function
+
+
+
+
+
+End Class
+
+   </script>
+</job>

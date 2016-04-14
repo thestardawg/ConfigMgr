@@ -1,0 +1,148 @@
+<job id="StartMBAMEncryption">
+   <script language="VBScript" src="ZTIUtility.vbs"/>
+   <script language="VBScript">
+
+' // ***************************************************************************
+' // 
+' // Copyright (c) Microsoft Corporation.  All rights reserved.
+' // 
+' // Microsoft Deployment Toolkit Solution Accelerator
+' //
+' // File:      StartMBAMEncryption.wsf
+' // 
+' // Version:   6.0.2058.0
+' // 
+' // Purpose:   Start encryption using MBAM
+' // 
+' // Usage:     cscript StartMBAMEncryption.wsf [/debug:true] /AddRegFile:add.reg /RemoveRegFile:remove.reg
+' // 
+' // ***************************************************************************
+
+Option Explicit
+RunNewInstance
+
+'//----------------------------------------------------------------------------
+'//
+'//  Global constants
+'//
+'//----------------------------------------------------------------------------
+
+'//----------------------------------------------------------------------------
+'//  Main Class
+'//----------------------------------------------------------------------------
+
+Class StartMBAMEncryption
+
+  Function Main
+  Dim oService, oServices, objWMIBDE, colEnVol, oEncVol, oWMITPM, oTPMs, oTPM
+  Dim iRetVal, iLoopCount, iEncryptionStatus, iPercentComplete
+  Dim SAddRegFile, sAddRefFilePath, sRemoveRegFile, sRemoveRegFilePath, scmd, sConnection, sRegCMD
+  Dim bWaitForEncryption, bTPMActive, bEndorsementKeyPairPresent
+  
+    sAddRegFile = oEnvironment.Item("AddRegFile")
+    If SAddRegFile <> "" then
+      iRetVal = oUtility.FindFIle(sAddRegFile, sAddRefFilePath)
+      TestAndFail iRetVal, 10001, "Could not Find AddRegfile: " & sAddRegFile
+    Else
+      TestAndFail False, 10002, "/AddRegFile not specified"
+    End If
+    
+    sRemoveRegFile = oEnvironment.Item("RemoveRegFile")
+    If sRemoveRegFile <> "" then
+    wscript.echo sRemoveRegFile
+      iRetVal = oUtility.FindFIle(sRemoveRegFile, sRemoveRegFilePath)
+      TestAndFail iRetVal, 10003, "Could not Find RemoveRegFile: " & sRemoveRegFile
+    Else
+      TestAndFail False, 10004, "/RemoveRegFile not specified"
+    End If
+    bWaitForEncryption = (ucase(oEnvironment.Item("WaitForEncryption")) = "TRUE")
+
+    ' Get BitLocker WMI Object
+    sConnection = "winmgmts:{impersonationLevel=impersonate,authenticationLevel=pktPrivacy}!root\cimv2\Security\MicrosoftVolumeEncryption"  
+    On Error resume Next
+    Set objWMIBDE = GetObject(sConnection)
+    on error goto 0
+    TestAndFail Err, 10007, "Unable to connect to Bitlocker WMI Object -  bitlocker not installed"
+
+    Set oWMITPM = GetObject("WinMgmts:{impersonationLevel=impersonate,AuthenticationLevel=pktprivacy}//" & "." & "\root\CIMV2\Security\MicrosoftTpm")
+    TestAndFail (Not (oWMITPM is Nothing)), 10014,  "Got TPM WMI TPM object"
+    Set oTPMs = oWMITPM.InstancesOf("Win32_Tpm")
+    TestAndFail (oTPMS.Count > 0), 10015, "TPM Present"
+    For Each oTPM In oTPMS
+      iRetVal = oTPM.IsActivated(bTPMActive)
+      TestAndFail iRetval, 10010, "Checking to see if TPM Active"
+      TestAndFail bTPMActive, 10011, "TPM is Active"
+      iRetVal = oTPM.IsEndorsementKeyPairPresent(bEndorsementKeyPairPresent)
+      TestAndFail iRetval, 10012, "Checking to see if TPM has Endorsement Keys"
+      If (not TestAndLog(bEndorsementKeyPairPresent, "TPM Endorsement Key Pair present.")) Then
+        oLogging.CreateEntry "Creating Endorsement Key Pair.", LogEntryInfo
+        iRetVal = oTPM.CreateEndorsementKeyPair()
+        TestAndFail iRetval, 10013, "Creating Endorsement Key Pair"
+      End If
+    Next
+
+    Set oServices = objWMI.ExecQuery("Select * from win32_service where name='MBAMAgent'")
+    TestAndFail (oServices.count = 1), 10005, "MBAM Client Agent is installed"
+    'Stop the service 
+    For Each oService In oServices
+      oService.StopService()
+    Next
+    
+    If oFSO.FileExists(oShell.ExpandEnvironmentStrings("%SystemRoot%\sysnative\reg.exe")) then
+        sRegCMD = oShell.ExpandEnvironmentStrings("%SystemRoot%\sysnative\reg.exe")
+        Wscript.echo "in true branch"
+    Else
+        sRegCMD = oShell.ExpandEnvironmentStrings("%SystemRoot%\system32\reg.exe") 
+        Wscript.echo "in fALSE branch"
+    End if
+    oLogging.CreateEntry "using " & sRegCMD & " for Reg Import", LogTypeInfo
+    
+    sCMD = sRegCMD & " IMPORT """ & sAddRefFilePath & """"
+    iRetVal = oUtility.RunWithHeartbeat(sCMD)
+    TestAndFail iretVal, 10006, "Importing AddRegFile: " & sAddRefFilePath
+    ' Restart the MBAMAgent Service
+    for each oService in oServices
+      oService.StartService()
+    Next
+    iLoopCount = 0
+    Do 
+      oLogging.ReportProgress "Waiting For Encryptiont to Start",  iLoopCount*4/20
+      oLogging.CreateEntry "Waiting for Encryption to Start", LogTypeInfo
+      wscript.Sleep 15000
+      Set colEnVol = objWMIBDE.ExecQuery("Select * from Win32_EncryptableVolume where DriveLetter='C:'")
+      for each oEncVol in colEnVol
+        oEncVol.GetConversionStatus iEncryptionStatus, iPercentComplete
+      Next
+
+      ILoopCount = iLoopCount + 1
+      If iLoopCount >= 20 then 
+        TestAndFail False, 10008, "Timeout: Encryption did not start"
+      End If
+    Loop Until ((iEncryptionStatus = 1) or (iEncryptionStatus = 2))
+    oLogging.ReportProgress "Encryptiont Started", 100
+    oLogging.CreateEntry "Encryptiont Started", LogTypeInfo
+    sCMD = sRegCMD & " IMPORT """ & sRemoveRegFilePath & """"
+    iRetVal = oUtility.RunWithHeartbeat(sCMD)
+    TestAndFail iretVal, 10009, "Importing RemoveRegFile: " & sRemoveRegFilePath
+    if bWaitForEncryption then
+    iLoopCount = 0
+    Do
+      Set colEnVol = objWMIBDE.ExecQuery("Select * from Win32_EncryptableVolume where DriveLetter='C:'")
+      for each oEncVol in colEnVol
+      oEncVol.GetConversionStatus iEncryptionStatus, iPercentComplete
+      Next
+      oLogging.ReportProgress "Encrypting C: drive",  iPercentComplete
+      oLogging.CreateEntry "Encrypting C: drive " & iPercentComplete & "% Complete.", LogTypeInfo
+      wscript.Sleep 60000
+            ILoopCount = iLoopCount + 1
+      If iLoopCount > 300 then 
+        TestAndLog False, "Timeout: Encryption has not finished"
+        EXit Do
+      End If
+    Loop Until (iEncryptionStatus = 1)
+    end if
+	End Function
+
+End Class
+   </script>
+</job>
