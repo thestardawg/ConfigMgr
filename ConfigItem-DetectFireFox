@@ -1,0 +1,15 @@
+if (Test-Path "C:\Program Files (x86)\Mozilla Firefox")
+{
+    $Installed = Test-Path "C:\Program Files (x86)\Mozilla Firefox\firefox.exe”
+    #if (Test-Path “C:\Program Files (x86)\Mozilla Firefox\firefox.exe”) 
+    if ( $Installed -eq "$True" )
+    {
+        "FireFox x86 is Installed but Certs are Not Compliant"
+        Write-Host “NotCompliant"
+    }
+    Else 
+    {
+        "FireFox x86 is Not Installed"
+        Write-Host “Compliant”
+    }
+}
