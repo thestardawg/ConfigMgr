@@ -1,3 +1,5 @@
+String Version
+
 if (Test-Path "C:\Program Files (x86)\Mozilla Firefox")
 {
     $Installed = Test-Path "C:\Program Files (x86)\Mozilla Firefox\firefox.exe”
@@ -13,3 +15,7 @@ if (Test-Path "C:\Program Files (x86)\Mozilla Firefox")
         Write-Host “Compliant”
     }
 }
+
+Boolean
+$Firefox = Get-WmiObject -namespace root\cimv2\sms -class SMS_InstalledSoftware -filter "ARPDisplayName LIKE '%Firefox%'"
+if($Firefox){return $true}else{return $false}
